@@ -1,0 +1,86 @@
+from datetime import datetime
+import xml.etree.ElementTree as ET
+from bs4 import BeautifulSoup
+import requests
+
+
+def generate_rss():
+  rss = ET.Element('rss', version='2.0')
+  channel = ET.SubElement(rss, 'channel')
+
+  ET.SubElement(channel, 'title').text = (
+      'PlayGround.ru — Новости (Полный текст)'
+  )
+  ET.SubElement(channel, 'link').text = 'https://www.playground.ru/news'
+  ET.SubElement(channel, 'description').text = (
+      'Автоматическая RSS-лента с полными текстами и картинками'
+  )
+  ET.SubElement(channel, 'language').text = 'ru-RU'
+
+  url = 'https://www.playground.ru/news'
+  headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+
+  response = requests.get(url, headers=headers)
+  if response.status_code == 200:
+    soup = BeautifulSoup(response.text, 'html.parser')
+
+    count = 0
+    for item in soup.find_all('a', href=True):
+      href = item['href']
+      if '/news/' in href and href != '/news':
+        article_url = (
+            href if href.startswith('http') else 'https://www.playground.ru' + href
+        )
+
+        if count >= 10:
+          break
+
+        try:
+          art_resp = requests.get(article_url, headers=headers, timeout=5)
+          if art_resp.status_code != 200:
+            continue
+          art_soup = BeautifulSoup(art_resp.text, 'html.parser')
+
+          title_tag = art_soup.find('h1')
+          title = title_tag.text.strip() if title_tag else 'Новость'
+
+          content_div = art_soup.find('div', class_='article-text') or art_soup.find(
+              'div', class_='content'
+          )
+          full_text = (
+              str(content_div) if content_div else '<p>Текст не найден</p>'
+          )
+
+          img_url = ''
+          img_tag = art_soup.find('meta', property='og:image')
+          if img_tag and img_tag.get('content'):
+            img_url = img_tag['content']
+            full_text = f'<p><img src="{img_url}"/></p>' + full_text
+
+          # Добавляем в XML
+          feed_item = ET.SubElement(channel, 'item')
+          ET.SubElement(feed_item, 'title').text = title
+          ET.SubElement(feed_item, 'link').text = article_url
+          ET.SubElement(feed_item, 'guid').text = article_url
+          ET.SubElement(feed_item, 'pubDate').text = datetime.utcnow().strftime(
+              '%a, %d %b %Y %H:%M:%S GMT'
+          )
+
+          if img_url:
+            ET.SubElement(
+                feed_item, 'enclosure', url=img_url, type='image/jpeg', length='0'
+            )
+
+          desc = ET.SubElement(feed_item, 'description')
+          desc.text = full_text
+
+          count += 1
+        except Exception:
+          continue
+
+  tree = ET.ElementTree(rss)
+  tree.write('index.xml', encoding='utf-8', xml_declaration=True)
+
+
+if __name__ == '__main__':
+  generate_rss()
